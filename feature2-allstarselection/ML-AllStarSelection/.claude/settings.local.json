@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python phase1_eda.py)",
+      "Bash(python3 phase1_eda.py)",
+      "Bash(pip3 install:*)",
+      "Bash(python3 -m venv --help)"
+    ]
+  }
+}

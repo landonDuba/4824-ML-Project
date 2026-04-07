@@ -1,0 +1,80 @@
+Phase 1 - Exploratory Data Analysis (Complete)
+
+What I did:
+Phase 1 was the exploratory phase. The goal was to understand the data and prove the
+idea works before writing any real algorithms.
+
+Step 1 - Built the data pipeline
+- The dataset has a dedicated All-Star Selections.csv with clean labels
+- Created a lag-join: take a player's stats from season Y-1, label = were they an All-Star in Y
+- This is the core framing: predict next year's All-Stars from last year's stats
+- Handled traded players by keeping only the season-total (TOT) row
+
+Step 2 - Measured class imbalance
+- Only ~24 out of ~450 players per season are All-Stars = 1:11 imbalance
+- A model predicting "never All-Star" would be 94% accurate but completely useless
+- This means accuracy is a bad metric, need F1 and top-24 recall instead
+
+Step 3 - Ranked features by correlation
+- VORP (0.58) and Win Shares (0.54) are the strongest predictors
+- PTS/game (0.53) and MP/game (0.41) also matter
+- Shooting efficiency (FG%, FT%) barely correlates, volume and impact matter more
+
+Step 4 - Ran a throwaway baseline
+- Untuned Logistic Regression to confirm the signal is there
+- ROC-AUC: 0.97 (strong signal in the data)
+- Top-24 recall per season: only 50-72% (real room to improve)
+- Precision: 0.40 (too many false positives which is the main problem to fix in Phase 2)
+
+What this proved:
+- The data pipeline works and the lag-join framing is valid
+- The data has strong predictive signal
+- A properly tuned model should do significantly better than the baseline
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+--------------------------------------------------------------------------------
+
+Phase 2 - Final Implementation (Next)
+
+Goal: build the real models that satisfy the Option B algorithm implementation requirement.
+
+Demo Target
+• Take processed data (previous season stats) and output a ranked list of predicted
+  All-Stars for a given year — runnable live in a Jupyter notebook
+• Input: a year Y, Output: top-24 predicted All-Stars for season Y with probabilities
+
+Steps
+• Properly implement Logistic Regression (baseline)
+  - Tune regularization strength C via cross-validation
+  - Use class_weight='balanced' for imbalance
+• Implement Random Forest Classifier (comparison model)
+  - Tune n_estimators, max_depth, min_samples_leaf via cross-validation
+  - Same imbalance handling
+• Evaluate both models head-to-head
+  - Metrics: F1 (macro), precision, recall, ROC-AUC, top-24 recall per season
+• SHAP feature attribution — explain which stats drive predictions
+• Ethics audit — check if predictions are biased by position, conference, or market size
+
+Tip: For the cleanest experience, open VS Code directly in the feature2-allstarselection folder 
+(code /path/to/feature2-allstarselection) so Claude Code is scoped to that directory from the start.
