@@ -13,7 +13,8 @@ import os
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import (classification_report, roc_auc_score,
-                             confusion_matrix, ConfusionMatrixDisplay)
+                             confusion_matrix, ConfusionMatrixDisplay,
+                             roc_curve, f1_score)
 from sklearn.pipeline import Pipeline
 
 # ── 1. Load data ──────────────────────────────────────────────────────────────
@@ -151,13 +152,28 @@ y_proba = pipeline.predict_proba(X_test)[:, 1]
 
 print("\n=== Baseline Logistic Regression Results ===")
 print(classification_report(y_test, y_pred, target_names=['Non-All-Star', 'All-Star']))
-print(f"ROC-AUC: {roc_auc_score(y_test, y_proba):.4f}")
+auc_score = roc_auc_score(y_test, y_proba)
+print(f"ROC-AUC: {auc_score:.4f}")
+
+fpr, tpr, _ = roc_curve(y_test, y_proba)
+plt.figure(figsize=(6, 5))
+plt.plot(fpr, tpr, color='steelblue', linewidth=2, label=f'Logistic Regression (AUC = {auc_score:.3f})')
+plt.plot([0, 1], [0, 1], 'k--', linewidth=1, label='Random guess (AUC = 0.5)')
+plt.xlabel('False Positive Rate\n(Non-All-Stars wrongly flagged)')
+plt.ylabel('True Positive Rate\n(Real All-Stars correctly caught)')
+plt.title('ROC Curve — All-Star Prediction')
+plt.legend(loc='lower right')
+plt.tight_layout()
+plt.savefig('roc_curve.png', dpi=120)
+plt.close()
+print("Saved: roc_curve.png")
 
 cm = confusion_matrix(y_test, y_pred)
+f1 = f1_score(y_test, y_pred)
 disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=['Non-All-Star', 'All-Star'])
 fig, ax = plt.subplots(figsize=(5, 4))
 disp.plot(ax=ax, colorbar=False)
-plt.title('Baseline Logistic Regression - Confusion Matrix')
+plt.title(f'Baseline Logistic Regression - Confusion Matrix\nF1 Score (All-Star): {f1:.3f}')
 plt.tight_layout()
 plt.savefig('baseline_confusion_matrix.png', dpi=120)
 plt.close()

@@ -1,80 +1,39 @@
-Phase 1 - Exploratory Data Analysis (Complete)
+## Phase 1 — Baseline & EDA
+- Built the data pipeline: lag-join (season Y-1 stats → Y All-Star label), TOT-row handling for traded players
+- Measured 1:11 class imbalance (~24 All-Stars out of ~450 players)
+- Ranked features by correlation — VORP and Win Shares are strongest
+- Trained untuned Logistic Regression baseline
+- Result: **AUC 0.97, top-24 recall 50–72%**
 
-What I did:
-Phase 1 was the exploratory phase. The goal was to understand the data and prove the
-idea works before writing any real algorithms.
+## Phase 2 — Real Models + Explainability
+- Tuned Logistic Regression (C) via GridSearchCV with TimeSeriesSplit
+- Tuned Random Forest (n_estimators, max_depth, min_samples_leaf)
+- Full head-to-head: ROC-AUC, F1, precision, recall, top-24 recall
+- SHAP feature attribution for the Random Forest
+- Ethics audit for position/conference/market-size bias (all small, no systematic bias)
+- Result: **RF F1 0.58, top-24 recall ~60%**
 
-Step 1 - Built the data pipeline
-- The dataset has a dedicated All-Star Selections.csv with clean labels
-- Created a lag-join: take a player's stats from season Y-1, label = were they an All-Star in Y
-- This is the core framing: predict next year's All-Stars from last year's stats
-- Handled traded players by keeping only the season-total (TOT) row
+## Phase 3 — Enhanced Features + Conference Split
+- Added team win%, prior All-Star count, 2-year rolling averages, YoY delta features
+- Added Gradient Boosting (HistGradientBoostingClassifier) as a 3rd model
+- Switched to conference-aware evaluation: top 12 East + top 12 West (matches real NBA rules)
+- Feature count: 16 → 31
+- Result: **AUC 0.972, top-24 recall ~62%** — rolling and prior-AS features landed in top 10 by SHAP
 
-Step 2 - Measured class imbalance
-- Only ~24 out of ~450 players per season are All-Stars = 1:11 imbalance
-- A model predicting "never All-Star" would be 94% accurate but completely useless
-- This means accuracy is a bad metric, need F1 and top-24 recall instead
+## Phase 4 — Vote Shares, Snubs & Availability
+- Added All-NBA, All-Defense, MVP, DPOY vote share features (lagged 1 year)
+- Built the **availability filter** — drop players with <30 games in the current season (handles Ja Morant suspension, Kawhi injuries, etc.)
+- Per-season **snub list** — who the model picked that voters didn't
+- **Career trajectory plots** for 8 marquee players
+- Result: **RF top-24 recall 61% → 65.6% with filter** (+4.3 pp)
 
-Step 3 - Ranked features by correlation
-- VORP (0.58) and Win Shares (0.54) are the strongest predictors
-- PTS/game (0.53) and MP/game (0.41) also matter
-- Shooting efficiency (FG%, FT%) barely correlates, volume and impact matter more
+## Phase 5 — Hindsight Model (New Angle)
+- Flipped framing: use season Y's own stats to predict Y's All-Stars (no lag)
+- Excluded end-of-season award shares to avoid leakage (those are awarded post–All-Star game)
+- Captures breakout players the lag model misses (Luka 2020, Brunson 2024)
+- Result: **top-24 recall jumps to 74% (RF), 79% for 2024 specifically** — probably the stats-only ceiling
+- Reveals the persistent stat-based snubs: DeRozan, Butler, Sabonis, P. George
 
-Step 4 - Ran a throwaway baseline
-- Untuned Logistic Regression to confirm the signal is there
-- ROC-AUC: 0.97 (strong signal in the data)
-- Top-24 recall per season: only 50-72% (real room to improve)
-- Precision: 0.40 (too many false positives which is the main problem to fix in Phase 2)
+---
 
-What this proved:
-- The data pipeline works and the lag-join framing is valid
-- The data has strong predictive signal
-- A properly tuned model should do significantly better than the baseline
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
---------------------------------------------------------------------------------
-
-Phase 2 - Final Implementation (Next)
-
-Goal: build the real models that satisfy the Option B algorithm implementation requirement.
-
-Demo Target
-• Take processed data (previous season stats) and output a ranked list of predicted
-  All-Stars for a given year — runnable live in a Jupyter notebook
-• Input: a year Y, Output: top-24 predicted All-Stars for season Y with probabilities
-
-Steps
-• Properly implement Logistic Regression (baseline)
-  - Tune regularization strength C via cross-validation
-  - Use class_weight='balanced' for imbalance
-• Implement Random Forest Classifier (comparison model)
-  - Tune n_estimators, max_depth, min_samples_leaf via cross-validation
-  - Same imbalance handling
-• Evaluate both models head-to-head
-  - Metrics: F1 (macro), precision, recall, ROC-AUC, top-24 recall per season
-• SHAP feature attribution — explain which stats drive predictions
-• Ethics audit — check if predictions are biased by position, conference, or market size
-
-Tip: For the cleanest experience, open VS Code directly in the feature2-allstarselection folder 
-(code /path/to/feature2-allstarselection) so Claude Code is scoped to that directory from the start.
+**Arc of the project:** 50–72% → ~60% → ~62% → 65.6% → **74%**, with each phase adding one coherent idea (real tuning → better features → real-world rules → external data + filtering → different framing).
