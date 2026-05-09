@@ -1,14 +1,8 @@
-"""
-Phase 1 - Exploratory Data Analysis: All-Star Prediction
-Goal: understand data shape, class imbalance, feature correlations,
-and run a baseline model using previous-season stats to predict All-Star selection.
-"""
+"""Phase 1 - EDA + baseline LR for All-Star prediction."""
 
 import kagglehub
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
 import os
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
@@ -17,7 +11,6 @@ from sklearn.metrics import (classification_report, roc_auc_score,
                              roc_curve, f1_score)
 from sklearn.pipeline import Pipeline
 
-# ── 1. Load data ──────────────────────────────────────────────────────────────
 path = kagglehub.dataset_download("sumitrodatta/nba-aba-baa-stats")
 
 allstar  = pd.read_csv(os.path.join(path, "All-Star Selections.csv"))
@@ -29,7 +22,6 @@ print(f"All-Star Selections : {allstar.shape}")
 print(f"Player Per Game     : {per_game.shape}")
 print(f"Advanced            : {advanced.shape}")
 
-# ── 2. Inspect All-Star data ──────────────────────────────────────────────────
 print("\n=== All-Star Selections sample ===")
 print(allstar.head(10).to_string())
 print(f"\nLeagues present    : {allstar['lg'].unique()}")
@@ -41,19 +33,14 @@ allstar_nba = allstar[allstar['lg'] == 'NBA'].copy()
 print(f"\nNBA All-Star rows   : {len(allstar_nba)}")
 print(f"Selections per season (avg): {allstar_nba.groupby('season').size().mean():.1f}")
 
-# ── 3. Build label column: was player an All-Star in season Y? ─────────────────
-# We only care that the player was selected (including replacements counts).
 allstar_flags = (
     allstar_nba[['player_id', 'season']]
     .drop_duplicates()
     .assign(all_star=1)
 )
 
-# ── 4. Merge per-game + advanced stats ───────────────────────────────────────
-# For players traded mid-season, Basketball-Reference includes a 'TOT' (total) row.
-# Keep only the TOT row when duplicates exist, otherwise keep the single entry.
+# For players traded mid-season Basketball-Reference adds a 'TOT' row; keep that one.
 def deduplicate_players(df):
-    """Keep TOT row for traded players, else the single team row."""
     multi = df[df.duplicated(subset=['player_id', 'season'], keep=False)]
     tot   = multi[multi['team'] == 'TOT']
     single = df[~df.duplicated(subset=['player_id', 'season'], keep=False)]
@@ -64,7 +51,6 @@ advanced_clean = deduplicate_players(advanced[advanced['lg'] == 'NBA'])
 
 print(f"\nAfter dedup - Per Game: {per_game_clean.shape}, Advanced: {advanced_clean.shape}")
 
-# Merge on player_id + season
 stats = per_game_clean.merge(
     advanced_clean[['player_id', 'season', 'per', 'ts_percent', 'ws', 'ws_48',
                     'bpm', 'vorp', 'usg_percent', 'obpm', 'dbpm']],
@@ -72,9 +58,9 @@ stats = per_game_clean.merge(
     how='inner'
 )
 
-# ── 5. Create lag features: stats from season Y-1, label from season Y ────────
+# Lag join: a row's stats predict the following season's All-Star label.
 stats_lag = stats.copy()
-stats_lag['label_season'] = stats_lag['season'] + 1  # this row's stats predict NEXT season
+stats_lag['label_season'] = stats_lag['season'] + 1
 
 merged = stats_lag.merge(
     allstar_flags.rename(columns={'season': 'label_season'}),
@@ -83,7 +69,6 @@ merged = stats_lag.merge(
 )
 merged['all_star'] = merged['all_star'].fillna(0).astype(int)
 
-# Filter to seasons where we actually have All-Star data (post-1951)
 valid_seasons = allstar_flags['season'].unique()
 merged = merged[merged['label_season'].isin(valid_seasons)]
 
@@ -94,7 +79,6 @@ print(f"Non-All-Stars:                   {(merged['all_star'] == 0).sum()}")
 print(f"Class imbalance ratio:           1:{(merged['all_star']==0).sum() // merged['all_star'].sum()}")
 print(f"Season range (label_season):     {merged['label_season'].min()} – {merged['label_season'].max()}")
 
-# ── 6. Feature correlation with All-Star label ────────────────────────────────
 feature_cols = [
     'pts_per_game', 'ast_per_game', 'trb_per_game', 'stl_per_game', 'blk_per_game',
     'fg_percent', 'ft_percent', 'mp_per_game', 'g',
@@ -114,7 +98,6 @@ plt.savefig('feature_correlation.png', dpi=120)
 plt.close()
 print("\nSaved: feature_correlation.png")
 
-# ── 7. Class imbalance by season ──────────────────────────────────────────────
 season_counts = merged.groupby('label_season')['all_star'].agg(['sum', 'count'])
 season_counts['rate'] = season_counts['sum'] / season_counts['count']
 
@@ -128,8 +111,6 @@ plt.savefig('allstar_rate_by_season.png', dpi=120)
 plt.close()
 print("Saved: allstar_rate_by_season.png")
 
-# ── 8. Baseline Logistic Regression ──────────────────────────────────────────
-# Chronological split: train on seasons before 2015, test on 2015+
 train = merged[merged['label_season'] < 2015].copy()
 test  = merged[merged['label_season'] >= 2015].copy()
 
@@ -179,8 +160,6 @@ plt.savefig('baseline_confusion_matrix.png', dpi=120)
 plt.close()
 print("Saved: baseline_confusion_matrix.png")
 
-# ── 9. Top-N prediction sanity check ─────────────────────────────────────────
-# For each test season, check how many true All-Stars appear in top-24 predicted
 test = test.copy()
 test['proba'] = y_proba
 

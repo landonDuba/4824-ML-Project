@@ -1,14 +1,9 @@
-"""
-Phase 2 - Final Implementation: All-Star Prediction
-Tuned LR vs Random Forest, SHAP attribution, ethics audit,
-and live demo: input year Y -> top-24 predicted All-Stars.
-"""
+"""Phase 2 - Tuned LR + RF, SHAP attribution, ethics audit."""
 
 import kagglehub
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
 import os
 import warnings
 warnings.filterwarnings('ignore')
@@ -25,7 +20,6 @@ from sklearn.metrics import (
 )
 import shap
 
-# ── 1. Load & preprocess ──────────────────────────────────────────────────────
 path = kagglehub.dataset_download("sumitrodatta/nba-aba-baa-stats")
 
 allstar  = pd.read_csv(os.path.join(path, "All-Star Selections.csv"))
@@ -74,7 +68,6 @@ FEATURE_COLS = [
     'per', 'ts_percent', 'ws', 'ws_48', 'bpm', 'vorp', 'usg_percent'
 ]
 
-# ── 2. Train / test split (chronological) ─────────────────────────────────────
 train = merged[merged['label_season'] < 2015].copy()
 test  = merged[merged['label_season'] >= 2015].copy()
 
@@ -86,7 +79,6 @@ y_test  = test['all_star']
 print(f"Train: {len(train)} rows | {y_train.sum()} All-Stars")
 print(f"Test : {len(test)} rows  | {y_test.sum()} All-Stars\n")
 
-# ── 3. Tuned Logistic Regression ──────────────────────────────────────────────
 print("=== Tuning Logistic Regression ===")
 tscv = TimeSeriesSplit(n_splits=5)
 
@@ -106,7 +98,6 @@ print(f"Best C: {lr_cv.best_params_['clf__C']}  |  CV AUC: {lr_cv.best_score_:.4
 lr_pred  = best_lr.predict(X_test)
 lr_proba = best_lr.predict_proba(X_test)[:, 1]
 
-# ── 4. Tuned Random Forest ────────────────────────────────────────────────────
 print("\n=== Tuning Random Forest ===")
 rf_cv = GridSearchCV(
     RandomForestClassifier(class_weight='balanced', random_state=42),
@@ -124,7 +115,6 @@ print(f"Best params: {rf_cv.best_params_}  |  CV AUC: {rf_cv.best_score_:.4f}")
 rf_pred  = best_rf.predict(X_test)
 rf_proba = best_rf.predict_proba(X_test)[:, 1]
 
-# ── 5. Head-to-head evaluation table ─────────────────────────────────────────
 print("\n=== Head-to-Head Evaluation ===")
 
 def evaluate(name, y_true, y_pred, y_proba):
@@ -147,7 +137,6 @@ print(classification_report(y_test, lr_pred, target_names=['Non-All-Star', 'All-
 print("Random Forest — full report:")
 print(classification_report(y_test, rf_pred, target_names=['Non-All-Star', 'All-Star']))
 
-# ── 6. ROC curve comparison ───────────────────────────────────────────────────
 fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 for ax, (name, proba, color) in zip(axes, [
     ('Logistic Regression', lr_proba, 'steelblue'),
@@ -166,7 +155,6 @@ plt.savefig('roc_comparison.png', dpi=120)
 plt.close()
 print("\nSaved: roc_comparison.png")
 
-# ── 7. Confusion matrices side by side ───────────────────────────────────────
 fig, axes = plt.subplots(1, 2, figsize=(10, 4))
 for ax, (name, pred, color) in zip(axes, [
     ('Logistic Regression', lr_pred, 'Blues'),
@@ -181,7 +169,6 @@ plt.savefig('confusion_comparison.png', dpi=120)
 plt.close()
 print("Saved: confusion_comparison.png")
 
-# ── 8. Top-24 recall per season ───────────────────────────────────────────────
 print("\n=== Top-24 Recall per Season ===")
 test_eval = test.copy()
 test_eval['lr_proba'] = lr_proba
@@ -210,12 +197,11 @@ plt.savefig('top24_recall.png', dpi=120)
 plt.close()
 print("Saved: top24_recall.png")
 
-# ── 9. SHAP feature attribution (Random Forest) ───────────────────────────────
 print("\n=== SHAP Feature Attribution ===")
 explainer   = shap.TreeExplainer(best_rf)
 shap_values = explainer.shap_values(X_test)
 
-# shap returns list [class0, class1], 3D array (n_samples, n_features, n_classes), or 2D array
+# shap may return a list, a 3D array, or a 2D array depending on version.
 if isinstance(shap_values, list):
     sv = shap_values[1]
 elif shap_values.ndim == 3:
@@ -235,7 +221,6 @@ mean_shap = pd.Series(np.abs(sv).mean(axis=0), index=FEATURE_COLS).sort_values(a
 print("\nMean |SHAP| per feature (higher = more influential):")
 print(mean_shap.round(4).to_string())
 
-# Bar chart version of SHAP importance
 plt.figure(figsize=(8, 5))
 mean_shap.plot(kind='barh', color='darkorange')
 plt.gca().invert_yaxis()
@@ -246,7 +231,6 @@ plt.savefig('shap_importance.png', dpi=120)
 plt.close()
 print("Saved: shap_importance.png")
 
-# ── 10. Ethics audit ──────────────────────────────────────────────────────────
 print("\n=== Ethics Audit ===")
 
 EAST = {
@@ -291,9 +275,7 @@ print(bias_table(test_audit, 'conference').to_string())
 print("\nMarket size bias:")
 print(bias_table(test_audit, 'market').to_string())
 
-# ── 11. Demo: predict All-Stars for any season ────────────────────────────────
 def predict_allstars(year: int, model=best_rf, top_n: int = 24):
-    """Input: season year. Output: top_n ranked predicted All-Stars with probabilities."""
     candidates = merged[merged['label_season'] == year].copy()
     if candidates.empty:
         print(f"No data for season {year}. Available range: "

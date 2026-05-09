@@ -1,8 +1,4 @@
-"""
-Phase 4 — Vote Share Features + Deep Analysis
-New features: All-NBA vote share, MVP vote share, DPOY vote share (all lagged 1 year)
-New analysis: snub list per season, player career probability trajectories
-"""
+"""Phase 4 - Vote share features, snub analysis, availability filter, career trajectories."""
 
 import kagglehub
 import pandas as pd
@@ -21,7 +17,6 @@ from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
 from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score
 import shap
 
-# ── 1. Load data ───────────────────────────────────────────────────────────────
 path = kagglehub.dataset_download("sumitrodatta/nba-aba-baa-stats")
 
 allstar      = pd.read_csv(os.path.join(path, "All-Star Selections.csv"))
@@ -54,41 +49,31 @@ stats = per_game_clean.merge(
     how='inner'
 ).sort_values(['player_id', 'season'])
 
-# ── 2. Team win% ───────────────────────────────────────────────────────────────
 win_pct = team_summary[team_summary['lg'] == 'NBA'][['season', 'abbreviation', 'w', 'l']].copy()
 win_pct['win_pct'] = win_pct['w'] / (win_pct['w'] + win_pct['l'])
 stats = stats.merge(win_pct[['season', 'abbreviation', 'win_pct']].rename(columns={'abbreviation': 'team'}),
                     on=['season', 'team'], how='left')
 stats['win_pct'] = stats['win_pct'].fillna(0.5)
 
-# ── 3. Vote share features (same-season — will be lagged via the lag join) ────
-# All-NBA vote share: take the max share per player-season (handles duplicate rows)
+# Same-season vote share features — get lagged later via the lag join.
+# max() per player-season collapses any duplicate rows.
 allnba = (
     eostv[eostv['type'] == 'all_nba']
     .groupby(['player_id', 'season'])['share']
-    .max()
-    .reset_index()
-    .rename(columns={'share': 'allnba_share'})
+    .max().reset_index().rename(columns={'share': 'allnba_share'})
 )
-# All-Defense vote share
 alldef = (
     eostv[eostv['type'] == 'all_defense']
     .groupby(['player_id', 'season'])['share']
-    .max()
-    .reset_index()
-    .rename(columns={'share': 'alldef_share'})
+    .max().reset_index().rename(columns={'share': 'alldef_share'})
 )
-# MVP vote share
 mvp_vs = (
     awards[awards['award'] == 'nba mvp']
-    [['player_id', 'season', 'share']]
-    .rename(columns={'share': 'mvp_share'})
+    [['player_id', 'season', 'share']].rename(columns={'share': 'mvp_share'})
 )
-# DPOY vote share
 dpoy_vs = (
     awards[awards['award'] == 'nba dpoy']
-    [['player_id', 'season', 'share']]
-    .rename(columns={'share': 'dpoy_share'})
+    [['player_id', 'season', 'share']].rename(columns={'share': 'dpoy_share'})
 )
 
 for df, col in [(allnba, 'allnba_share'), (alldef, 'alldef_share'),
@@ -96,10 +81,8 @@ for df, col in [(allnba, 'allnba_share'), (alldef, 'alldef_share'),
     stats = stats.merge(df, on=['player_id', 'season'], how='left')
     stats[col] = stats[col].fillna(0)
 
-# Was this player on any All-NBA team this season?
 stats['was_allnba'] = (stats['allnba_share'] > 0).astype(int)
 
-# ── 4. Rolling averages and YoY deltas ────────────────────────────────────────
 roll_cols  = ['pts_per_game', 'ast_per_game', 'trb_per_game', 'ws', 'vorp', 'bpm']
 delta_cols = ['pts_per_game', 'ws', 'vorp', 'bpm']
 
@@ -114,7 +97,6 @@ for col in delta_cols:
         .transform(lambda x: x.diff().fillna(0))
     )
 
-# ── 5. Lag join ───────────────────────────────────────────────────────────────
 stats_lag = stats.copy()
 stats_lag['label_season'] = stats_lag['season'] + 1
 
@@ -127,8 +109,8 @@ merged['all_star'] = merged['all_star'].fillna(0).astype(int)
 valid_seasons = allstar_flags['season'].unique()
 merged = merged[merged['label_season'].isin(valid_seasons)].sort_values('label_season')
 
-# Join current-season (label_season) games played as an availability signal.
-# At All-Star selection time (February), voters know who's been playing.
+# Current-season games played as an availability signal: at selection time
+# (February) voters know who's been playing, so this is not leakage.
 current_g = per_game_clean[['player_id', 'season', 'g']].rename(
     columns={'season': 'label_season', 'g': 'current_g'}
 )
@@ -136,7 +118,6 @@ current_g = current_g.groupby(['player_id', 'label_season'])['current_g'].max().
 merged = merged.merge(current_g, on=['player_id', 'label_season'], how='left')
 merged['current_g'] = merged['current_g'].fillna(0)
 
-# ── 6. Prior All-Star count ───────────────────────────────────────────────────
 for lag in [1, 2, 3]:
     temp = allstar_flags[['player_id', 'season']].copy()
     temp['label_season'] = temp['season'] + lag
@@ -146,7 +127,6 @@ for lag in [1, 2, 3]:
     merged[f'was_as_{lag}'] = merged[f'was_as_{lag}'].fillna(0).astype(int)
 merged['prior_as_3yr'] = merged['was_as_1'] + merged['was_as_2'] + merged['was_as_3']
 
-# ── 7. Conference ─────────────────────────────────────────────────────────────
 EAST = {'ATL','BOS','BRK','CHI','CHO','CLE','DET','IND','MIA','MIL',
         'NJN','NYK','ORL','PHI','TOR','WAS','CHH','CHA'}
 WEST = {'DAL','DEN','GSW','HOU','LAC','LAL','MEM','MIN','NOP','OKC',
@@ -155,7 +135,6 @@ merged['conference'] = merged['team'].apply(
     lambda t: 'East' if t in EAST else ('West' if t in WEST else 'Unknown')
 )
 
-# ── 8. Feature set ─────────────────────────────────────────────────────────────
 BASE_COLS = [
     'pts_per_game', 'ast_per_game', 'trb_per_game', 'stl_per_game', 'blk_per_game',
     'fg_percent', 'ft_percent', 'mp_per_game', 'g',
@@ -168,9 +147,8 @@ DELTA_COLS = [f'{c}_delta' for c in delta_cols]
 OTHER_COLS = ['win_pct']
 
 FEATURE_COLS = BASE_COLS + VOTE_COLS + HIST_COLS + ROLL_COLS + DELTA_COLS + OTHER_COLS
-print(f"Total features: {len(FEATURE_COLS)}  (+{len(VOTE_COLS)} vote share features vs phase3)")
+print(f"Total features: {len(FEATURE_COLS)}")
 
-# ── 9. Train / test split ─────────────────────────────────────────────────────
 train = merged[merged['label_season'] < 2015].copy()
 test  = merged[merged['label_season'] >= 2015].copy()
 
@@ -184,7 +162,6 @@ print(f"Test : {len(test)} rows  | {y_test.sum()} All-Stars\n")
 
 tscv = TimeSeriesSplit(n_splits=5)
 
-# ── 10. Model training ────────────────────────────────────────────────────────
 print("=== Tuning Logistic Regression ===")
 lr_cv = GridSearchCV(
     Pipeline([('scaler', StandardScaler()),
@@ -223,7 +200,6 @@ hgb_proba = best_hgb.predict_proba(X_test)[:, 1]
 hgb_pred  = best_hgb.predict(X_test)
 print(f"Best params: {hgb_cv.best_params_}  |  CV AUC: {hgb_cv.best_score_:.4f}")
 
-# ── 11. Head-to-head + conference-aware top-24 ────────────────────────────────
 print("\n=== Standard Metrics ===")
 def evaluate(name, y_true, y_pred, y_proba):
     return {
@@ -269,7 +245,8 @@ for m, label in [('lr','LR'),('rf','RF'),('hgb','GBM')]:
     avg = season_df[m].sum() / season_df['true_AS'].sum()
     print(f"{label} overall recall: {avg:.1%}")
 
-# ── 11b. Availability filter: exclude players who played < 30 games ──────────
+# Availability filter: a player who hasn't played enough games can't be an All-Star,
+# so drop anyone below MIN_GAMES from the top-24 pool. Catches injured/suspended stars.
 MIN_GAMES = 30
 print(f"\n=== Conference-Aware Top-24 WITH Availability Filter (≥{MIN_GAMES} games played) ===")
 
@@ -299,11 +276,10 @@ for m, label in [('lr','LR'),('rf','RF'),('hgb','GBM')]:
     delta_pp   = (filtered - unfiltered) * 100
     print(f"{label} recall — unfiltered: {unfiltered:.1%}  |  filtered: {filtered:.1%}  |  Δ {delta_pp:+.1f} pp")
 
-# Side-by-side comparison chart
 x = np.arange(len(season_df))
 w = 0.35
 plt.figure(figsize=(13, 5))
-plt.bar(x-w/2, season_df['rf'], w, label=f'RF (no filter)',         color='darkorange', alpha=0.6)
+plt.bar(x-w/2, season_df['rf'], w, label='RF (no filter)',           color='darkorange', alpha=0.6)
 plt.bar(x+w/2, filter_df['rf'], w, label=f'RF (≥{MIN_GAMES} games)', color='darkorange')
 plt.xticks(x, season_df['season'].astype(int), rotation=45)
 plt.ylabel('True All-Stars in Top 24')
@@ -314,7 +290,6 @@ plt.savefig('phase4_availability_filter.png', dpi=120)
 plt.close()
 print("\nSaved: phase4_availability_filter.png")
 
-# Bar chart
 x, w = np.arange(len(season_df)), 0.25
 plt.figure(figsize=(13, 5))
 plt.bar(x-w,   season_df['lr'],  w, label='LR',  color='steelblue')
@@ -329,7 +304,6 @@ plt.savefig('phase4_top24_recall.png', dpi=120)
 plt.close()
 print("\nSaved: phase4_top24_recall.png")
 
-# ── 12. SHAP — what do the vote share features contribute? ───────────────────
 print("\n=== SHAP Feature Attribution (RF) ===")
 explainer   = shap.TreeExplainer(best_rf)
 shap_values = explainer.shap_values(X_test)
@@ -354,17 +328,10 @@ plt.savefig('phase4_shap.png', dpi=120)
 plt.close()
 print("Saved: phase4_shap.png")
 
-# ── 13. SNUB LIST analysis ────────────────────────────────────────────────────
-print("\n" + "="*60)
-print("SNUB LIST — High probability, not selected (RF model)")
-print("="*60)
-
-# Use RF as primary model for analysis
-test_eval['rf_rank'] = test_eval.groupby('label_season')['rf_proba'].rank(ascending=False)
+print("\n=== Snub list (RF predicted top-24 but not selected) ===")
 
 snubs_all = []
 for season, grp in test_eval.groupby('label_season'):
-    # Conference-aware top 24: top 12 East + top 12 West
     selected_idx = []
     for conf, slots in [('East', 12), ('West', 12)]:
         cg = grp[grp['conference'] == conf]
@@ -373,7 +340,6 @@ for season, grp in test_eval.groupby('label_season'):
     predicted_set = set(selected_idx)
     name_col = 'player' if 'player' in grp.columns else 'player_id'
 
-    # Snubs: in predicted top-24, but not actual All-Star
     snubbed = grp.loc[
         grp.index.isin(predicted_set) & (grp['all_star'] == 0),
         [name_col, 'team', 'conference', 'rf_proba', 'allnba_share', 'mvp_share', 'all_star']
@@ -381,7 +347,6 @@ for season, grp in test_eval.groupby('label_season'):
     snubbed['season'] = season
     snubs_all.append(snubbed)
 
-    # Missed: actual All-Star NOT in predicted top-24
     missed = grp.loc[
         ~grp.index.isin(predicted_set) & (grp['all_star'] == 1),
         [name_col, 'team', 'conference', 'rf_proba', 'all_star']
@@ -402,7 +367,6 @@ for season, grp in test_eval.groupby('label_season'):
 snubs_df = pd.concat(snubs_all, ignore_index=True)
 name_col = 'player' if 'player' in snubs_df.columns else 'player_id'
 
-# Most frequent snubs across all seasons
 print("\n=== Most Frequent Model Predictions That Weren't Selected ===")
 frequent_snubs = (
     snubs_df.groupby(name_col)
@@ -412,16 +376,13 @@ frequent_snubs = (
 )
 print(frequent_snubs.round(3).to_string())
 
-# ── 14. PLAYER CAREER TRAJECTORY plots ───────────────────────────────────────
 print("\n=== Player Career Probability Trajectories ===")
 
-# Generate probabilities for ALL seasons (not just test), using RF
 all_proba = best_rf.predict_proba(merged[FEATURE_COLS].fillna(0))[:, 1]
 merged_plot = merged.copy()
 merged_plot['rf_proba'] = all_proba
 name_col_m = 'player' if 'player' in merged_plot.columns else 'player_id'
 
-# Pick players: top 10 by total All-Star selections in the dataset
 top_players = (
     merged_plot[merged_plot['all_star'] == 1]
     .groupby(name_col_m)['all_star'].sum()
@@ -442,7 +403,6 @@ for ax, player_name in zip(axes, top_players):
     ax.fill_between(player_data['label_season'], player_data['rf_proba'],
                     alpha=0.15, color='steelblue')
 
-    # Mark actual All-Star seasons with gold stars
     actual = player_data[player_data['all_star'] == 1]
     ax.scatter(actual['label_season'], actual['rf_proba'],
                color='gold', edgecolors='black', s=80, zorder=5, label='Actual All-Star')
@@ -461,7 +421,6 @@ plt.savefig('career_trajectories.png', dpi=120)
 plt.close()
 print(f"Saved: career_trajectories.png  (players: {', '.join(top_players)})")
 
-# ── 15. Demo ──────────────────────────────────────────────────────────────────
 def predict_allstars(year: int, model=best_rf, min_games: int = MIN_GAMES):
     candidates = merged[merged['label_season'] == year].copy()
     if candidates.empty:
@@ -490,4 +449,3 @@ if demo is not None:
     print(demo.round(3).to_string())
     correct = demo['actual_allstar'].sum()
     print(f"\n{correct}/24 were actual All-Stars ({correct/24*100:.0f}% top-24 recall)")
-    print(f"Phase3 best for 2024: 16/25 (64%) — improvement: {correct - 16:+d}")

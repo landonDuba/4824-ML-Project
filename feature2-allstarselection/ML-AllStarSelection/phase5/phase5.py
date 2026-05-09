@@ -1,11 +1,7 @@
-"""
-Phase 5 — Hindsight Model
-Uses season X's own stats to predict season X's All-Stars.
-This is "who DESERVED it based on their season" rather than "who will make it".
+"""Phase 5 - Hindsight model: season X stats → season X All-Stars (stats-only ceiling).
 
-Note: this is hindsight because full-season stats include post-All-Star-game
-performance. End-of-season award shares (All-NBA, MVP, DPOY) are excluded
-because those are determined after the All-Star game (data leakage).
+End-of-season award shares (All-NBA, MVP, DPOY) are excluded because they're
+determined after the All-Star game — including them would leak.
 """
 
 import kagglehub
@@ -23,7 +19,6 @@ from sklearn.pipeline import Pipeline
 from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
 from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score
 
-# ── 1. Load data ───────────────────────────────────────────────────────────────
 path = kagglehub.dataset_download("sumitrodatta/nba-aba-baa-stats")
 
 allstar      = pd.read_csv(os.path.join(path, "All-Star Selections.csv"))
@@ -54,7 +49,6 @@ stats = per_game_clean.merge(
     how='inner'
 ).sort_values(['player_id', 'season'])
 
-# ── 2. Team win% ───────────────────────────────────────────────────────────────
 win_pct = team_summary[team_summary['lg'] == 'NBA'][['season', 'abbreviation', 'w', 'l']].copy()
 win_pct['win_pct'] = win_pct['w'] / (win_pct['w'] + win_pct['l'])
 stats = stats.merge(
@@ -63,7 +57,6 @@ stats = stats.merge(
 )
 stats['win_pct'] = stats['win_pct'].fillna(0.5)
 
-# ── 3. Rolling averages and YoY deltas (historical context) ──────────────────
 roll_cols  = ['pts_per_game', 'ast_per_game', 'trb_per_game', 'ws', 'vorp', 'bpm']
 delta_cols = ['pts_per_game', 'ws', 'vorp', 'bpm']
 
@@ -78,8 +71,7 @@ for col in delta_cols:
         .transform(lambda x: x.diff().fillna(0))
     )
 
-# ── 4. Same-season join (NO LAG — hindsight) ──────────────────────────────────
-# Label the player's All-Star status in the SAME season as their stats
+# Same-season join (no lag) — this is what makes the model hindsight.
 merged = stats.merge(
     allstar_flags,
     on=['player_id', 'season'],
@@ -91,7 +83,6 @@ valid_seasons = allstar_flags['season'].unique()
 merged = merged[merged['season'].isin(valid_seasons)].sort_values('season')
 merged = merged.rename(columns={'season': 'label_season'})
 
-# ── 5. Prior All-Star count (historical — no leakage) ─────────────────────────
 for lag in [1, 2, 3]:
     temp = allstar_flags[['player_id', 'season']].copy()
     temp['label_season'] = temp['season'] + lag
@@ -101,7 +92,6 @@ for lag in [1, 2, 3]:
     merged[f'was_as_{lag}'] = merged[f'was_as_{lag}'].fillna(0).astype(int)
 merged['prior_as_3yr'] = merged['was_as_1'] + merged['was_as_2'] + merged['was_as_3']
 
-# ── 6. Conference ─────────────────────────────────────────────────────────────
 EAST = {'ATL','BOS','BRK','CHI','CHO','CLE','DET','IND','MIA','MIL',
         'NJN','NYK','ORL','PHI','TOR','WAS','CHH','CHA'}
 WEST = {'DAL','DEN','GSW','HOU','LAC','LAL','MEM','MIN','NOP','OKC',
@@ -110,7 +100,6 @@ merged['conference'] = merged['team'].apply(
     lambda t: 'East' if t in EAST else ('West' if t in WEST else 'Unknown')
 )
 
-# ── 7. Feature set — NO end-of-season awards (would leak) ────────────────────
 BASE_COLS = [
     'pts_per_game', 'ast_per_game', 'trb_per_game', 'stl_per_game', 'blk_per_game',
     'fg_percent', 'ft_percent', 'mp_per_game', 'g',
@@ -122,10 +111,8 @@ DELTA_COLS = [f'{c}_delta' for c in delta_cols]
 OTHER_COLS = ['win_pct']
 
 FEATURE_COLS = BASE_COLS + HIST_COLS + ROLL_COLS + DELTA_COLS + OTHER_COLS
-print(f"Total features: {len(FEATURE_COLS)}")
-print(f"Framing: season X stats → season X All-Star label (hindsight)\n")
+print(f"Total features: {len(FEATURE_COLS)}\n")
 
-# ── 8. Train / test split ─────────────────────────────────────────────────────
 train = merged[merged['label_season'] < 2015].copy()
 test  = merged[merged['label_season'] >= 2015].copy()
 
@@ -139,7 +126,6 @@ print(f"Test : {len(test)} rows  | {y_test.sum()} All-Stars\n")
 
 tscv = TimeSeriesSplit(n_splits=5)
 
-# ── 9. Model training ─────────────────────────────────────────────────────────
 print("=== Tuning Logistic Regression ===")
 lr_cv = GridSearchCV(
     Pipeline([('scaler', StandardScaler()),
@@ -178,7 +164,6 @@ hgb_proba = best_hgb.predict_proba(X_test)[:, 1]
 hgb_pred  = best_hgb.predict(X_test)
 print(f"Best params: {hgb_cv.best_params_}  |  CV AUC: {hgb_cv.best_score_:.4f}")
 
-# ── 10. Head-to-head ──────────────────────────────────────────────────────────
 print("\n=== Standard Metrics — Hindsight Model ===")
 def evaluate(name, y_true, y_pred, y_proba):
     return {
@@ -195,12 +180,6 @@ results = pd.DataFrame([
 ])
 print(results.to_string(index=False))
 
-print("\nPhase 4 (lag model) reference:")
-print("  LR  AUC 0.9734  F1 0.5870  Precision 0.4314  Recall 0.9180")
-print("  RF  AUC 0.9724  F1 0.6043  Precision 0.4764  Recall 0.8262")
-print("  GBM AUC 0.9717  F1 0.5549  Precision 0.4021  Recall 0.8951")
-
-# ── 11. Conference-aware top-24 ───────────────────────────────────────────────
 test_eval = test.copy()
 test_eval['lr_proba']  = lr_proba
 test_eval['rf_proba']  = rf_proba
@@ -228,38 +207,21 @@ print()
 for m, label in [('lr','LR'),('rf','RF'),('hgb','GBM')]:
     avg = season_df[m].sum() / season_df['true_AS'].sum()
     print(f"{label} overall recall: {avg:.1%}")
-print("\nPhase 4 lag model overall recall (unfiltered): LR 61.6%  RF 61.3%  GBM 60.7%")
-print("Phase 4 lag model overall recall (filtered):    LR 64.3%  RF 65.6%  GBM 64.6%")
 
-# ── 12. Side-by-side comparison chart ─────────────────────────────────────────
-# Phase 4 numbers by season (unfiltered RF from phase4 output)
-phase4_rf = {2015:18, 2016:19, 2017:18, 2018:16, 2019:18, 2020:13,
-             2021:16, 2022:13, 2023:13, 2024:15, 2025:13, 2026:15}
-phase5_rf = dict(zip(season_df['season'], season_df['rf']))
-
-seasons_x = sorted(phase4_rf.keys())
-p4_vals = [phase4_rf[s] for s in seasons_x]
-p5_vals = [phase5_rf.get(s, 0) for s in seasons_x]
-
-x = np.arange(len(seasons_x))
-w = 0.35
+x = np.arange(len(season_df))
+w = 0.5
 plt.figure(figsize=(13, 5))
-plt.bar(x - w/2, p4_vals, w, label='Phase 4 (lag: stats Y-1 → AS Y)',     color='steelblue')
-plt.bar(x + w/2, p5_vals, w, label='Phase 5 (hindsight: stats Y → AS Y)', color='seagreen')
-plt.xticks(x, seasons_x, rotation=45)
+plt.bar(x, season_df['rf'], w, label='RF (hindsight)', color='seagreen')
+plt.xticks(x, season_df['season'].astype(int), rotation=45)
 plt.ylabel('True All-Stars in Top 24 (conf-aware)')
-plt.title('Lag Model vs Hindsight Model — RF Top-24 Recall')
+plt.title('Hindsight Model — RF Top-24 Recall per Season')
 plt.legend()
 plt.tight_layout()
 plt.savefig('phase5_vs_phase4.png', dpi=120)
 plt.close()
 print("\nSaved: phase5_vs_phase4.png")
 
-# ── 13. "Who deserved it?" — stat-based snubs ────────────────────────────────
-print("\n" + "="*60)
-print("STAT-BASED SNUBS — Who deserved it based on their season?")
-print("="*60)
-print("(Players the hindsight model put in top-24 but voters didn't select)\n")
+print("\n=== Stat-based snubs (model picked, voters didn't) ===")
 
 name_col = 'player' if 'player' in test_eval.columns else 'player_id'
 
@@ -282,7 +244,6 @@ for season, grp in test_eval.groupby('label_season'):
                   f"VORP={r['vorp']:.1f}  G={int(r['g'])}  prob={r['rf_proba']:.3f}")
         print()
 
-# ── 14. Demo ──────────────────────────────────────────────────────────────────
 def predict_allstars_hindsight(year: int, model=best_rf):
     candidates = merged[merged['label_season'] == year].copy()
     if candidates.empty:
@@ -310,4 +271,3 @@ if demo is not None:
     print(demo.round(3).to_string())
     correct = demo['actual_allstar'].sum()
     print(f"\n{correct}/24 matched actual All-Stars ({correct/24*100:.0f}% top-24 recall)")
-    print(f"Phase 4 lag model for 2024: 15–16 / 24")

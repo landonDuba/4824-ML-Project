@@ -1,10 +1,4 @@
-"""
-Phase 3 - Improved All-Star Prediction
-Improvements over phase2:
-  1. Enhanced features: 2yr rolling avg, YoY delta, prior AS count, team win%
-  2. XGBoost model
-  3. Conference-aware evaluation (top 12 East + 12 West)
-"""
+"""Phase 3 - Enhanced features, GBM, conference-aware top-24."""
 
 import kagglehub
 import pandas as pd
@@ -15,18 +9,15 @@ import warnings
 warnings.filterwarnings('ignore')
 
 from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, HistGradientBoostingClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
 from sklearn.metrics import (
-    roc_auc_score, f1_score, precision_score, recall_score,
-    classification_report
+    roc_auc_score, f1_score, precision_score, recall_score, roc_curve,
 )
-from sklearn.ensemble import HistGradientBoostingClassifier
 import shap
 
-# ── 1. Load data ───────────────────────────────────────────────────────────────
 path = kagglehub.dataset_download("sumitrodatta/nba-aba-baa-stats")
 
 allstar      = pd.read_csv(os.path.join(path, "All-Star Selections.csv"))
@@ -57,15 +48,13 @@ stats = per_game_clean.merge(
     how='inner'
 ).sort_values(['player_id', 'season'])
 
-# ── 2. New feature: team win% ──────────────────────────────────────────────────
 win_pct = team_summary[team_summary['lg'] == 'NBA'][['season', 'abbreviation', 'w', 'l']].copy()
 win_pct['win_pct'] = win_pct['w'] / (win_pct['w'] + win_pct['l'])
 win_pct = win_pct.rename(columns={'abbreviation': 'team'})
 
 stats = stats.merge(win_pct[['season', 'team', 'win_pct']], on=['season', 'team'], how='left')
-stats['win_pct'] = stats['win_pct'].fillna(0.5)  # traded players (TOT) get league average
+stats['win_pct'] = stats['win_pct'].fillna(0.5)  # TOT rows have no team — use league average
 
-# ── 3. New features: 2-year rolling averages and YoY deltas ───────────────────
 roll_cols  = ['pts_per_game', 'ast_per_game', 'trb_per_game', 'ws', 'vorp', 'bpm']
 delta_cols = ['pts_per_game', 'ws', 'vorp', 'bpm']
 
@@ -81,7 +70,6 @@ for col in delta_cols:
         .transform(lambda x: x.diff().fillna(0))
     )
 
-# ── 4. Lag join: season Y-1 stats → label season Y ───────────────────────────
 stats_lag = stats.copy()
 stats_lag['label_season'] = stats_lag['season'] + 1
 
@@ -95,7 +83,6 @@ merged['all_star'] = merged['all_star'].fillna(0).astype(int)
 valid_seasons = allstar_flags['season'].unique()
 merged = merged[merged['label_season'].isin(valid_seasons)].sort_values('label_season')
 
-# ── 5. New feature: prior All-Star selections (last 3 seasons) ────────────────
 for lag in [1, 2, 3]:
     temp = allstar_flags[['player_id', 'season']].copy()
     temp['label_season'] = temp['season'] + lag
@@ -109,7 +96,6 @@ for lag in [1, 2, 3]:
 
 merged['prior_as_3yr'] = merged['was_as_1'] + merged['was_as_2'] + merged['was_as_3']
 
-# ── 6. Conference mapping ──────────────────────────────────────────────────────
 EAST = {
     'ATL','BOS','BRK','CHI','CHO','CLE','DET','IND','MIA','MIL',
     'NJN','NYK','ORL','PHI','TOR','WAS','CHH','CHA'
@@ -122,7 +108,6 @@ merged['conference'] = merged['team'].apply(
     lambda t: 'East' if t in EAST else ('West' if t in WEST else 'Unknown')
 )
 
-# ── 7. Feature columns ────────────────────────────────────────────────────────
 BASE_COLS = [
     'pts_per_game', 'ast_per_game', 'trb_per_game', 'stl_per_game', 'blk_per_game',
     'fg_percent', 'ft_percent', 'mp_per_game', 'g',
@@ -135,9 +120,8 @@ NEW_COLS = (
 )
 FEATURE_COLS = BASE_COLS + NEW_COLS
 
-print(f"Total features: {len(FEATURE_COLS)}  (was 16 in phase2, now {len(FEATURE_COLS)})")
+print(f"Total features: {len(FEATURE_COLS)}")
 
-# ── 8. Train / test split ─────────────────────────────────────────────────────
 train = merged[merged['label_season'] < 2015].copy()
 test  = merged[merged['label_season'] >= 2015].copy()
 
@@ -151,7 +135,6 @@ print(f"Test : {len(test)} rows  | {y_test.sum()} All-Stars\n")
 
 tscv = TimeSeriesSplit(n_splits=5)
 
-# ── 9. Tuned Logistic Regression ──────────────────────────────────────────────
 print("=== Tuning Logistic Regression ===")
 lr_cv = GridSearchCV(
     Pipeline([
@@ -167,7 +150,6 @@ lr_proba  = best_lr.predict_proba(X_test)[:, 1]
 lr_pred   = best_lr.predict(X_test)
 print(f"Best C: {lr_cv.best_params_['clf__C']}  |  CV AUC: {lr_cv.best_score_:.4f}")
 
-# ── 10. Tuned Random Forest ───────────────────────────────────────────────────
 print("\n=== Tuning Random Forest ===")
 rf_cv = GridSearchCV(
     RandomForestClassifier(class_weight='balanced', random_state=42),
@@ -184,9 +166,8 @@ rf_proba = best_rf.predict_proba(X_test)[:, 1]
 rf_pred  = best_rf.predict(X_test)
 print(f"Best params: {rf_cv.best_params_}  |  CV AUC: {rf_cv.best_score_:.4f}")
 
-# ── 11. Gradient Boosting (HistGradientBoosting — sklearn's XGBoost equivalent) ─
 print("\n=== Tuning Gradient Boosting ===")
-# class_weight not supported; handle imbalance via sample_weight
+# HistGradientBoosting doesn't support class_weight — use sample_weight instead.
 sample_weight = y_train.map({0: 1, 1: (y_train == 0).sum() / (y_train == 1).sum()})
 
 hgb_cv = GridSearchCV(
@@ -204,7 +185,6 @@ xgb_proba = best_xgb.predict_proba(X_test)[:, 1]
 xgb_pred  = best_xgb.predict(X_test)
 print(f"Best params: {hgb_cv.best_params_}  |  CV AUC: {hgb_cv.best_score_:.4f}")
 
-# ── 12. Standard head-to-head metrics ─────────────────────────────────────────
 print("\n=== Head-to-Head Evaluation (standard metrics) ===")
 
 def evaluate(name, y_true, y_pred, y_proba):
@@ -217,43 +197,18 @@ def evaluate(name, y_true, y_pred, y_proba):
     }
 
 results = pd.DataFrame([
-    evaluate('LR  (phase2 baseline)', y_test, lr_pred,  lr_proba),
-    evaluate('RF',                    y_test, rf_pred,  rf_proba),
-    evaluate('GradientBoosting',      y_test, xgb_pred, xgb_proba),
+    evaluate('LR',               y_test, lr_pred,  lr_proba),
+    evaluate('RF',               y_test, rf_pred,  rf_proba),
+    evaluate('GradientBoosting', y_test, xgb_pred, xgb_proba),
 ])
 print(results.to_string(index=False))
 
-# ── 13. Conference-aware top-24 evaluation ────────────────────────────────────
 print("\n=== Conference-Aware Top-24 Recall (12 East + 12 West) ===")
 
 test_eval = test.copy()
 test_eval['lr_proba']  = lr_proba
 test_eval['rf_proba']  = rf_proba
 test_eval['xgb_proba'] = xgb_proba
-
-def top24_conf_recall(df, proba_col, season_col='label_season', conf_col='conference'):
-    rows = []
-    for season, grp in df.groupby(season_col):
-        total = grp['all_star'].sum()
-        hits = 0
-        for conf, slots in [('East', 12), ('West', 12)]:
-            conf_grp = grp[grp[conf_col] == conf]
-            if conf_grp.empty:
-                continue
-            hits += conf_grp.nlargest(slots, proba_col)['all_star'].sum()
-        # fallback: any 'Unknown' conference players go into global top-24 pool
-        unk = grp[grp[conf_col] == 'Unknown']
-        if not unk.empty:
-            already_selected = (
-                grp[grp[conf_col] == 'East'].nlargest(12, proba_col).index.tolist() +
-                grp[grp[conf_col] == 'West'].nlargest(12, proba_col).index.tolist()
-            )
-            remaining = grp[~grp.index.isin(already_selected)]
-            extra = min(len(remaining), 24 - 24)  # no extra slots needed if conf split fills 24
-            _ = extra  # suppress
-        rows.append({'season': season, 'hits': hits, 'total': total,
-                     'recall_pct': round(hits / total * 100) if total > 0 else 0})
-    return pd.DataFrame(rows)
 
 season_rows = []
 for season, grp in test_eval.groupby('label_season'):
@@ -284,9 +239,7 @@ avg_lr  = season_df['LR'].sum()  / season_df['true_AS'].sum()
 avg_rf  = season_df['RF'].sum()  / season_df['true_AS'].sum()
 avg_xgb = season_df['XGB'].sum() / season_df['true_AS'].sum()
 print(f"\nOverall top-24 recall (conf-aware):  LR {avg_lr:.1%}  |  RF {avg_rf:.1%}  |  XGB {avg_xgb:.1%}")
-print(f"Phase2 overall top-24 recall (global): LR ~60%  |  RF ~59%  (for reference)")
 
-# ── 14. Top-24 recall bar chart ───────────────────────────────────────────────
 x = np.arange(len(season_df))
 w = 0.25
 plt.figure(figsize=(13, 5))
@@ -302,8 +255,6 @@ plt.savefig('phase3_top24_recall.png', dpi=120)
 plt.close()
 print("\nSaved: phase3_top24_recall.png")
 
-# ── 15. ROC curves ────────────────────────────────────────────────────────────
-from sklearn.metrics import roc_curve
 plt.figure(figsize=(6, 5))
 for name, proba, color in [
     ('LR',               lr_proba,  'steelblue'),
@@ -323,7 +274,6 @@ plt.savefig('phase3_roc.png', dpi=120)
 plt.close()
 print("Saved: phase3_roc.png")
 
-# ── 16. SHAP on Random Forest (GBM not supported by TreeExplainer) ────────────
 print("\n=== SHAP Feature Attribution (Random Forest) ===")
 explainer   = shap.TreeExplainer(best_rf)
 shap_values = explainer.shap_values(X_test)
@@ -348,12 +298,7 @@ plt.savefig('phase3_shap.png', dpi=120)
 plt.close()
 print("Saved: phase3_shap.png")
 
-# ── 17. Demo ──────────────────────────────────────────────────────────────────
 def predict_allstars(year: int, model=best_xgb, top_n: int = 24, conf_aware: bool = True):
-    """
-    Return top predicted All-Stars for a given season.
-    conf_aware=True picks top 12 East + 12 West separately.
-    """
     candidates = merged[merged['label_season'] == year].copy()
     if candidates.empty:
         print(f"No data for {year}. Range: {merged['label_season'].min()}–{merged['label_season'].max()}")
@@ -371,13 +316,13 @@ def predict_allstars(year: int, model=best_xgb, top_n: int = 24, conf_aware: boo
     else:
         result = candidates.nlargest(top_n, 'probability')
 
-    return (
+    result = (
         result[[name_col, 'label_season', 'team', 'conference', 'probability', 'all_star']]
         .rename(columns={'label_season': 'season', 'all_star': 'actual_allstar'})
         .reset_index(drop=True)
-        .assign(**{name_col: lambda d: d[name_col]})
-        .pipe(lambda d: d.set_index(pd.RangeIndex(1, len(d)+1)))
     )
+    result.index += 1
+    return result
 
 print("\n=== Demo: Top-24 Predicted All-Stars for 2024 (GradientBoosting, conference-aware) ===")
 demo = predict_allstars(2024)
@@ -385,4 +330,3 @@ if demo is not None:
     print(demo.to_string())
     correct = demo['actual_allstar'].sum()
     print(f"\n{correct}/24 were actual All-Stars ({correct/24*100:.0f}% top-24 recall)")
-    print(f"Phase2 result for 2024: 15/24 (62%) — improvement: {correct - 15:+d}")
