@@ -1,1 +1,2 @@
 # 4824-ML-Project
+The goal of our project was to cast predictions across several areas in the NBA. We broke this into 3 parts: Player Performance Prediction, All-Star Prediction, MVP Prediction. We used the popular NBA dataset available on kaggle, https://www.kaggle.com/datasets/sumitrodatta/nba-aba-baa-stats. To run each part, simply run the ipynb file and view the output in the terminal in addition to the visualizations they may produce. 
